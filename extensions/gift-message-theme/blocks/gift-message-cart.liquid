@@ -1,0 +1,18 @@
+{{ 'gift-message.css' | asset_url | stylesheet_tag }}
+<script src="{{ 'gift-message.js' | asset_url }}" defer="defer"></script>
+
+<div class="gm-cart-luxury-container" data-context="cart">
+  <div class="gm-cart-loading">
+    <div class="gm-spinner"></div>
+    <span>Loading gift details...</span>
+  </div>
+</div>
+
+{% schema %}
+{
+  "name": "Gift Message (Cart)",
+  "target": "section",
+  "templates": ["cart"],
+  "settings": []
+}
+{% endschema %}

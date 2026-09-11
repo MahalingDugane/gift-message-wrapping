@@ -1,0 +1,68 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+model GiftSettings {
+  id                     String               @id @default(cuid())
+  shop                   String               @unique
+  isEnabled              Boolean              @default(true)
+  giftMessagePrompt      String               @default("Add a gift message")
+  giftMessageLabel       String               @default("Message")
+  giftMessagePlaceholder String               @default("Happy Birthday, Rahul! ❤️")
+  characterLimit         Int                  @default(200)
+  showCharCounter        Boolean              @default(true)
+  requireToFrom          Boolean              @default(true)
+  toLabel                String               @default("To (Recipient)")
+  fromLabel              String               @default("From (Sender)")
+  giftWrapEnabled        Boolean              @default(true)
+  giftWrapLabel          String               @default("Add Premium Gift Box")
+  wrappingProductId      String?
+  defaultCardStyle       String               @default("classic")
+  storeSignature         String               @default("Sent with Love ❤️")
+  designs                GiftWrappingDesign[]
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+}
+
+model GiftWrappingDesign {
+  id            String       @id @default(cuid())
+  shop          String
+  name          String
+  description   String?      @default("Includes luxury wrapping")
+  price         Float        @default(10.0)
+  imageUrl      String?      
+  variantId     String?      
+  isActive      Boolean      @default(true)
+  isDefault     Boolean      @default(false)
+  sortOrder     Int          @default(0)
+  settings      GiftSettings @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([shop])
+}

@@ -1,0 +1,101 @@
+{{ 'gift-message.css' | asset_url | stylesheet_tag }}
+<script src="{{ 'gift-message.js' | asset_url }}" defer="defer"></script>
+
+<div class="gm-luxury-wrapper gift-message-container" data-context="product" data-max-chars="{{ block.settings.max_chars | default: 500 }}">
+  
+  <!-- Premium Header -->
+  <div class="gm-lux-header">
+    <div class="gm-lux-icon-main">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#e11d48" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 12 20 22 4 22 4 12"></polyline><rect x="2" y="7" width="20" height="5"></rect><line x1="12" y1="22" x2="12" y2="7"></line><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"></path><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"></path></svg>
+    </div>
+    <div class="gm-lux-title-group">
+      <h3>Gift Message & Wrapping</h3>
+      <p>Make your gift extra special with a personalized message and beautiful wrapping.</p>
+    </div>
+  </div>
+
+  <!-- GIFT MESSAGE SECTION -->
+  <div class="gm-lux-section">
+    <label class="gm-lux-toggle-row">
+      <div class="gm-toggle-label-group">
+        <span class="gm-toggle-icon">💌</span>
+        <span class="gm-toggle-text">Add a gift message</span>
+      </div>
+      <div class="gm-switch">
+        <input type="checkbox" class="gift-message-checkbox" />
+        <span class="gm-slider"></span>
+      </div>
+    </label>
+
+    <div class="gift-message-fields gm-collapsible">
+      <div class="gm-lux-input-row">
+        <div class="gm-lux-input-group">
+          <label for="gift-to-{{ block.id }}">To (Recipient) *</label>
+          <div class="gm-lux-input-wrapper">
+            <span class="gm-input-icon">👤</span>
+            <input type="text" id="gift-to-{{ block.id }}" class="gm-lux-input gift-input" placeholder="Recipient's Name" />
+          </div>
+        </div>
+        <div class="gm-lux-input-group">
+          <label for="gift-from-{{ block.id }}">From (Sender) *</label>
+          <div class="gm-lux-input-wrapper">
+            <span class="gm-input-icon">👤</span>
+            <input type="text" id="gift-from-{{ block.id }}" class="gm-lux-input gift-input" placeholder="Your Name" />
+          </div>
+        </div>
+      </div>
+      
+      <div class="gm-lux-input-group" style="margin-top: 16px;">
+        <label for="gift-msg-{{ block.id }}">Personal Gift Message <span class="gift-char-counter">(0 / {{ block.settings.max_chars | default: 500 }} characters)</span></label>
+        <textarea id="gift-msg-{{ block.id }}" class="gm-lux-textarea gift-textarea" placeholder="Write your heartfelt message here (e.g., Happy Birthday! Wishing you the best year ahead! ❤️)"></textarea>
+      </div>
+
+      <div class="gm-lux-emojis">
+        <span class="gm-emoji-label">Quick Emojis:</span>
+        <button class="gift-emoji-btn" data-emoji="❤️">❤️</button>
+        <button class="gift-emoji-btn" data-emoji="🎉">🎉</button>
+        <button class="gift-emoji-btn" data-emoji="🎂">🎂</button>
+        <button class="gift-emoji-btn" data-emoji="🎁">🎁</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- GIFT WRAPPING SECTION (Hidden by default until API loads settings) -->
+  <div class="gm-lux-section gift-wrapping-option" style="display: none;">
+    <label class="gm-lux-toggle-row" style="border-top: 1px solid #fce7ec; padding-top: 24px; margin-top: 8px;">
+      <div class="gm-toggle-label-group">
+        <span class="gm-toggle-icon">🛍️</span>
+        <div class="gm-toggle-text-stack">
+          <span class="gm-toggle-text gift-wrapping-title-display">Add premium gift wrapping</span>
+          <span class="gm-toggle-desc">Give your gift a beautiful finishing touch.</span>
+        </div>
+      </div>
+      <div class="gm-switch">
+        <input type="checkbox" class="gift-wrapping-checkbox" />
+        <span class="gm-slider"></span>
+      </div>
+    </label>
+
+    <div class="gift-wrapping-fields gm-collapsible">
+      <div class="gift-design-grid gm-lux-design-grid">
+        <!-- JS dynamically injects cards here -->
+      </div>
+      <div class="gm-lux-selected-preview">
+        <!-- JS dynamically injects the selected design summary here -->
+      </div>
+    </div>
+  </div>
+
+  <span class="gift-status-indicator"></span>
+  <div style="display:none;" class="gift-prompt-text"></div>
+</div>
+
+{% schema %}
+{
+  "name": "Gift Message & Wrapping",
+  "target": "section",
+  "settings": [
+    { "type": "number", "id": "max_chars", "label": "Max Message Characters", "default": 500 }
+  ]
+}
+{% endschema %}
