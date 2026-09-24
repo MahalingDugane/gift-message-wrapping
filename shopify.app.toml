@@ -1,21 +1,7 @@
 client_id = "2816a61f18b691a903df849f9278ce30"
-
 application_url = "https://gift-message-wrapping-7rdk.vercel.app"
-
 embedded = true
-
 name = "Gift Message & Wrapping"
-
-[webhooks]
-api_version = "2026-10"
-
-[[webhooks.subscriptions]]
-uri = "/webhooks"
-compliance_topics = [
-  "customers/data_request",
-  "customers/redact",
-  "shop/redact"
-]
 
 [access_scopes]
 scopes = "read_customers,read_orders,read_products,write_products"
@@ -34,3 +20,18 @@ automatically_update_urls_on_dev = true
 url = "/api/gift-settings"
 prefix = "apps"
 subpath = "gift-settings"
+
+[webhooks]
+api_version = "2025-01"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks"
+  compliance_topics = [
+    "customers/data_request",
+    "customers/redact",
+    "shop/redact"
+  ]

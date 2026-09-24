@@ -54,7 +54,7 @@ export const action = async ({ request }) => {
       });
     }
 
-    // 1. IDEMPOTENT MASTER PRODUCT LOOKUP (Normalized GID)
+    // 1. RESOLVE OR CREATE MASTER WRAPPING PRODUCT (STRICT MULTI-STORE SHOP SCOPE)
     let productGid = toShopifyGid("Product", settings.wrappingProductId);
 
     if (productGid) {
@@ -167,8 +167,21 @@ export const action = async ({ request }) => {
       let rawVariantId = formData.get("variantId");
       let variantGid = toShopifyGid("ProductVariant", rawVariantId);
 
-      // Branch A: New variant creation
-      if (!id || !variantGid) {
+      // Verify ownership if updating an existing record
+      if (id) {
+        const existingRecord = await prisma.giftWrappingDesign.findFirst({
+          where: { id: String(id), shop },
+        });
+        if (!existingRecord) {
+          return { error: "Wrapping design not found for this store." };
+        }
+        if (!variantGid && existingRecord.variantId) {
+          variantGid = toShopifyGid("ProductVariant", existingRecord.variantId);
+        }
+      }
+
+      // Branch A: Create new variant (Runs for new designs OR if existing design had missing variantId)
+      if (!variantGid) {
         const createVarRes = await admin.graphql(
           `mutation productVariantsBulkCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
             productVariantsBulkCreate(productId: $productId, variants: $variants) {
@@ -213,12 +226,14 @@ export const action = async ({ request }) => {
 
         variantGid = createdGid;
       } else {
-        // Branch B: Existing variant update (Validated GID required)
+        // Branch B: Update existing variant price and title in Shopify
         const updateVarRes = await admin.graphql(
           `mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkUpdateInput!]!) {
             productVariantsBulkUpdate(productId: $productId, variants: $variants) {
               productVariants {
                 id
+                title
+                price
               }
               userErrors {
                 field
@@ -233,6 +248,7 @@ export const action = async ({ request }) => {
                 {
                   id: variantGid,
                   price: formattedPrice,
+                  optionValues: [{ optionName: "Title", name }],
                 },
               ],
             },
@@ -259,8 +275,8 @@ export const action = async ({ request }) => {
       }
 
       if (id) {
-        await prisma.giftWrappingDesign.update({
-          where: { id: String(id) },
+        await prisma.giftWrappingDesign.updateMany({
+          where: { id: String(id), shop },
           data: {
             name,
             description,
@@ -292,33 +308,40 @@ export const action = async ({ request }) => {
     // 3. DELETE DESIGN
     if (intent === "delete_design") {
       const id = formData.get("id");
-      const design = await prisma.giftWrappingDesign.findUnique({ where: { id: String(id) } });
+      const design = await prisma.giftWrappingDesign.findFirst({
+        where: { id: String(id), shop },
+      });
 
-      const variantGid = toShopifyGid("ProductVariant", design?.variantId);
-      if (variantGid && productGid) {
-        try {
-          await admin.graphql(
-            `mutation productVariantsBulkDelete($productId: ID!, $variantsIds: [ID!]!) {
-              productVariantsBulkDelete(productId: $productId, variantsIds: $variantsIds) {
-                userErrors {
-                  field
-                  message
+      if (design) {
+        const variantGid = toShopifyGid("ProductVariant", design.variantId);
+        if (variantGid && productGid) {
+          try {
+            await admin.graphql(
+              `mutation productVariantsBulkDelete($productId: ID!, $variantsIds: [ID!]!) {
+                productVariantsBulkDelete(productId: $productId, variantsIds: $variantsIds) {
+                  userErrors {
+                    field
+                    message
+                  }
                 }
+              }`,
+              {
+                variables: {
+                  productId: productGid,
+                  variantsIds: [variantGid],
+                },
               }
-            }`,
-            {
-              variables: {
-                productId: productGid,
-                variantsIds: [variantGid],
-              },
-            }
-          );
-        } catch (err) {
-          console.warn("Variant deletion warning:", err);
+            );
+          } catch (err) {
+            console.warn("Variant deletion warning:", err);
+          }
         }
+
+        await prisma.giftWrappingDesign.deleteMany({
+          where: { id: String(id), shop },
+        });
       }
 
-      await prisma.giftWrappingDesign.delete({ where: { id: String(id) } });
       return { success: true };
     }
 
@@ -329,8 +352,8 @@ export const action = async ({ request }) => {
         where: { shop },
         data: { isDefault: false },
       });
-      await prisma.giftWrappingDesign.update({
-        where: { id: String(id) },
+      await prisma.giftWrappingDesign.updateMany({
+        where: { id: String(id), shop },
         data: { isDefault: true },
       });
       return { success: true };

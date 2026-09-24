@@ -7,7 +7,7 @@
     "node": ">=20.19 <22 || >=22.12 || >=24"
   },
   "scripts": {
-    "build": "prisma generate && prisma db push && react-router build",
+    "build": "prisma generate && react-router build",
     "dev": "shopify app dev",
     "config:link": "shopify app config link",
     "generate": "shopify app generate",

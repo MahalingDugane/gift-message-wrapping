@@ -1,8 +1,19 @@
 /**
  * Gift Message & Wrapping Storefront Integration
+ * Serialized queue, accessible controls, and duplicate-safe cart operations.
  */
 
-const KNOWN_WRAPPING_VARIANT_ID = 48293918605364;
+// Serialized asynchronous queue to guarantee sequential execution
+let _cartOperationQueue = Promise.resolve();
+
+function enqueueCartTask(task) {
+  _cartOperationQueue = _cartOperationQueue
+    .then(() => task())
+    .catch((err) => {
+      console.error("[Gift Wrap Queue] Task execution failed:", err);
+    });
+  return _cartOperationQueue;
+}
 
 document.addEventListener("DOMContentLoaded", () => {
   initGiftMessageWidgets();
@@ -65,21 +76,33 @@ function getNumericVariantId(rawId) {
   return Number.isSafeInteger(numericId) ? numericId : null;
 }
 
-function isWrappingCartItem(item) {
-  if (!item) return false;
-  const hasWrapProp =
-    (item.properties && item.properties._is_gift_wrapping === "true") ||
-    (item.properties && item.properties["_is_gift_wrapping"] === "true");
-  const isWrapId = Number(item.variant_id) === KNOWN_WRAPPING_VARIANT_ID;
-  return Boolean(hasWrapProp || isWrapId);
+function getActiveWrappingVariantId(container) {
+  const localId = getNumericVariantId(container?._activeVariantId);
+  if (localId) return localId;
+
+  if (window.__giftAppSettings?.designs?.length > 0) {
+    const defaultDesign =
+      window.__giftAppSettings.designs.find((d) => d.isDefault) ||
+      window.__giftAppSettings.designs[0];
+    return getNumericVariantId(defaultDesign?.variantId);
+  }
+  return null;
+}
+
+function getActiveWrappingDesignName(container) {
+  if (container?._activeDesignName) return container._activeDesignName;
+  if (window.__giftAppSettings?.designs?.length > 0) {
+    const defaultDesign =
+      window.__giftAppSettings.designs.find((d) => d.isDefault) ||
+      window.__giftAppSettings.designs[0];
+    return defaultDesign?.name || "Standard Wrapping";
+  }
+  return "Standard Wrapping";
 }
 
 async function fetchAppSettings() {
-  const shop = window.Shopify?.shop || "";
   const endpoints = [
-    "/apps/gift-message-wrapping/api/gift-settings",
     "/apps/gift-settings",
-    `/api/gift-settings?shop=${encodeURIComponent(shop)}`,
   ];
 
   for (const url of endpoints) {
@@ -113,8 +136,8 @@ function initProductWidget(container) {
   const wrappingCheckbox = container.querySelector(".gift-wrapping-checkbox");
   const wrappingFieldsWrapper = container.querySelector(".gift-wrapping-fields");
 
-  container._activeVariantId = KNOWN_WRAPPING_VARIANT_ID;
-  container._activeDesignName = "Classic Kraft";
+  container._activeVariantId = null;
+  container._activeDesignName = null;
   container._activeDesignObj = null;
 
   loadAndRenderSettings(container);
@@ -129,13 +152,22 @@ function initProductWidget(container) {
   }
 
   if (wrappingCheckbox && wrappingFieldsWrapper) {
-    wrappingCheckbox.addEventListener("change", async (e) => {
+    wrappingCheckbox.addEventListener("change", (e) => {
       if (e.target.checked) {
         wrappingFieldsWrapper.classList.add("is-active");
+        const variantId = getActiveWrappingVariantId(container);
+        const designName = getActiveWrappingDesignName(container);
+        if (variantId) {
+          enqueueCartTask(async () => {
+            await updateWrappingInCart(variantId, designName);
+          });
+        }
       } else {
         wrappingFieldsWrapper.classList.remove("is-active");
-        await removeAllWrappingFromCart();
-        await refreshCartUI();
+        enqueueCartTask(async () => {
+          await removeAllWrappingFromCart();
+          await refreshCartUI();
+        });
       }
       syncHiddenInputs(container);
       debounceCartUpdate(container);
@@ -204,13 +236,20 @@ async function loadAndRenderSettings(container) {
         grid.innerHTML = "";
 
         let defaultDesign = settings.designs.find((d) => d.isDefault) || settings.designs[0];
-        container._activeVariantId = getNumericVariantId(defaultDesign.variantId) || KNOWN_WRAPPING_VARIANT_ID;
-        container._activeDesignName = defaultDesign.name;
+        container._activeVariantId = getNumericVariantId(defaultDesign?.variantId);
+        container._activeDesignName = defaultDesign?.name || "Standard Wrapping";
         container._activeDesignObj = defaultDesign;
 
         settings.designs.forEach((design) => {
           const card = document.createElement("div");
-          card.className = `gm-lux-card ${design.id === defaultDesign.id ? "selected" : ""}`;
+          const isSelected = design.id === defaultDesign?.id;
+          card.className = `gm-lux-card ${isSelected ? "selected" : ""}`;
+
+          // Accessibility attributes
+          card.setAttribute("role", "button");
+          card.setAttribute("tabindex", "0");
+          card.setAttribute("aria-pressed", isSelected ? "true" : "false");
+          card.setAttribute("aria-label", `${design.name}, plus ${formatMoney(design.price)}`);
 
           const imgHTML = design.imageUrl
             ? `<img src="${design.imageUrl}" class="gm-lux-card-img" alt="${escapeHTML(design.name)}"/>`
@@ -227,18 +266,32 @@ async function loadAndRenderSettings(container) {
             </div>
           `;
 
-          card.addEventListener("click", async () => {
-            grid.querySelectorAll(".gm-lux-card").forEach((c) => c.classList.remove("selected"));
+          const selectDesign = () => {
+            grid.querySelectorAll(".gm-lux-card").forEach((c) => {
+              c.classList.remove("selected");
+              c.setAttribute("aria-pressed", "false");
+            });
             card.classList.add("selected");
-            container._activeVariantId = getNumericVariantId(design.variantId) || KNOWN_WRAPPING_VARIANT_ID;
+            card.setAttribute("aria-pressed", "true");
+            container._activeVariantId = getNumericVariantId(design.variantId);
             container._activeDesignName = design.name;
             container._activeDesignObj = design;
             renderSelectedPreview(container);
             syncHiddenInputs(container);
 
             const isWrap = Boolean(container.querySelector(".gift-wrapping-checkbox")?.checked);
-            if (isWrap) {
-              await updateWrappingInCart(container._activeVariantId, design.name);
+            if (isWrap && container._activeVariantId) {
+              enqueueCartTask(async () => {
+                await updateWrappingInCart(container._activeVariantId, design.name);
+              });
+            }
+          };
+
+          card.addEventListener("click", selectDesign);
+          card.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              selectDesign();
             }
           });
 
@@ -252,7 +305,7 @@ async function loadAndRenderSettings(container) {
     }
     syncHiddenInputs(container);
   } catch (err) {
-    console.warn("Settings sync failed:", err);
+    console.warn("[Gift Wrap] Settings sync failed:", err);
   }
 }
 
@@ -296,7 +349,7 @@ function syncHiddenInputs(container) {
     "From": isGiftChecked ? fromVal : "",
     "Gift Message": isGiftChecked ? msgVal : "",
     "Gift Wrapping": wrapChecked ? "Yes" : "No",
-    "Design": wrapChecked ? container._activeDesignName || "" : "",
+    "Design": wrapChecked ? (container._activeDesignName || "") : "",
   };
 
   Object.entries(attrs).forEach(([key, value]) => {
@@ -315,8 +368,10 @@ let debounceTimer = null;
 function debounceCartUpdate(container) {
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
-    syncCartAttributes(container);
-  }, 500);
+    enqueueCartTask(async () => {
+      await syncCartAttributes(container);
+    });
+  }, 400);
 }
 
 async function syncCartAttributes(container) {
@@ -332,7 +387,7 @@ async function syncCartAttributes(container) {
     "From": isGiftChecked ? fromVal : "",
     "Gift Message": isGiftChecked ? msgVal : "",
     "Gift Wrapping": wrapChecked ? "Yes" : "No",
-    "Design": wrapChecked ? container?._activeDesignName || "" : "",
+    "Design": wrapChecked ? (container?._activeDesignName || "") : "",
   };
 
   try {
@@ -341,11 +396,13 @@ async function syncCartAttributes(container) {
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ attributes }),
     });
-  } catch (err) {}
+  } catch (err) {
+    console.warn("[Gift Wrap] syncCartAttributes error:", err);
+  }
 }
 
 /* ========================================================
-   NORMAL ADD TO CART: ROBUST SEQUENTIAL PIPELINE
+   NORMAL ADD TO CART: SERIALIZED ATOMIC PIPELINE
    ======================================================== */
 function setupProductFormIntegration(container) {
   if (window._giftFetchIntercepted) return;
@@ -369,46 +426,46 @@ function setupProductFormIntegration(container) {
 
       if (response.ok) {
         const isWrap = Boolean(activeContainer?.querySelector(".gift-wrapping-checkbox")?.checked);
-        const wrappingVariantId =
-          getNumericVariantId(activeContainer?._activeVariantId) ||
-          KNOWN_WRAPPING_VARIANT_ID;
-        const selectedDesignName = activeContainer?._activeDesignName || "Classic Kraft";
+        const wrappingVariantId = getActiveWrappingVariantId(activeContainer);
+        const selectedDesignName = getActiveWrappingDesignName(activeContainer);
 
-        window._isAddingGift = true;
-        try {
-          await removeAllWrappingFromCart();
+        enqueueCartTask(async () => {
+          window._isAddingGift = true;
+          try {
+            await removeAllWrappingFromCart();
 
-          if (isWrap && wrappingVariantId) {
-            await originalFetch("/cart/add.js", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Accept: "application/json",
-              },
-              body: JSON.stringify({
-                items: [
-                  {
-                    id: Number(wrappingVariantId),
-                    quantity: 1,
-                    properties: {
-                      _is_gift_wrapping: "true",
-                      Design: selectedDesignName,
+            if (isWrap && wrappingVariantId) {
+              await originalFetch("/cart/add.js", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Accept: "application/json",
+                },
+                body: JSON.stringify({
+                  items: [
+                    {
+                      id: Number(wrappingVariantId),
+                      quantity: 1,
+                      properties: {
+                        _is_gift_wrapping: "true",
+                        Design: selectedDesignName,
+                      },
                     },
-                  },
-                ],
-              }),
-            });
-          }
+                  ],
+                }),
+              });
+            }
 
-          if (activeContainer) {
-            await syncCartAttributes(activeContainer);
+            if (activeContainer) {
+              await syncCartAttributes(activeContainer);
+            }
+            await refreshCartUI();
+          } catch (err) {
+            console.error("[Gift Wrap] Add to cart processing failed:", err);
+          } finally {
+            window._isAddingGift = false;
           }
-          await refreshCartUI();
-        } catch (err) {
-          console.error("[Gift Wrap] Error in Add to Cart wrapping flow:", err);
-        } finally {
-          window._isAddingGift = false;
-        }
+        });
       }
 
       return response;
@@ -441,7 +498,7 @@ function setupBuyItNowIntegration() {
 
   document.addEventListener(
     "click",
-    async function (event) {
+    function (event) {
       const targetBtn = event.target.closest(buyItNowSelector);
       if (!targetBtn) return;
 
@@ -465,89 +522,89 @@ function setupBuyItNowIntegration() {
       window._giftBuyItNowProcessing = true;
       window._isAddingGift = true;
 
-      try {
-        if (activeContainer) {
-          syncHiddenInputs(activeContainer);
-        }
-
-        let mainVariantId = null;
-        if (form) {
-          try {
-            const fd = new FormData(form);
-            mainVariantId = getNumericVariantId(fd.get("id"));
-          } catch (e) {}
-          if (!mainVariantId) {
-            const idInput = form.querySelector('[name="id"]');
-            if (idInput) mainVariantId = getNumericVariantId(idInput.value);
+      enqueueCartTask(async () => {
+        try {
+          if (activeContainer) {
+            syncHiddenInputs(activeContainer);
           }
-        }
-        if (!mainVariantId) {
-          const urlVariant = new URLSearchParams(window.location.search).get("variant");
-          if (urlVariant) mainVariantId = getNumericVariantId(urlVariant);
-        }
 
-        let mainQuantity = 1;
-        if (form) {
-          const qtyInput = form.querySelector('[name="quantity"]');
-          if (qtyInput) mainQuantity = parseInt(qtyInput.value, 10) || 1;
-        }
-
-        const productProperties = {};
-        if (form) {
-          form.querySelectorAll('[name^="properties["]').forEach((el) => {
-            const match = el.name.match(/^properties\[(.*?)\]$/);
-            if (match && match[1] && el.value && match[1] !== "_is_gift_wrapping") {
-              productProperties[match[1]] = String(el.value);
+          let mainVariantId = null;
+          if (form) {
+            try {
+              const fd = new FormData(form);
+              mainVariantId = getNumericVariantId(fd.get("id"));
+            } catch (e) {}
+            if (!mainVariantId) {
+              const idInput = form.querySelector('[name="id"]');
+              if (idInput) mainVariantId = getNumericVariantId(idInput.value);
             }
-          });
-        }
+          }
+          if (!mainVariantId) {
+            const urlVariant = new URLSearchParams(window.location.search).get("variant");
+            if (urlVariant) mainVariantId = getNumericVariantId(urlVariant);
+          }
 
-        const wrappingVariantId =
-          getNumericVariantId(activeContainer?._activeVariantId) ||
-          KNOWN_WRAPPING_VARIANT_ID;
-        const selectedDesignName = activeContainer?._activeDesignName || "Classic Kraft";
+          let mainQuantity = 1;
+          if (form) {
+            const qtyInput = form.querySelector('[name="quantity"]');
+            if (qtyInput) mainQuantity = parseInt(qtyInput.value, 10) || 1;
+          }
 
-        await removeAllWrappingFromCart();
+          const productProperties = {};
+          if (form) {
+            form.querySelectorAll('[name^="properties["]').forEach((el) => {
+              const match = el.name.match(/^properties\[(.*?)\]$/);
+              if (match && match[1] && el.value && match[1] !== "_is_gift_wrapping") {
+                productProperties[match[1]] = String(el.value);
+              }
+            });
+          }
 
-        const itemsToAdd = [];
-        if (mainVariantId) {
-          itemsToAdd.push({
-            id: Number(mainVariantId),
-            quantity: mainQuantity,
-            properties: productProperties,
-          });
-        }
+          const wrappingVariantId = getActiveWrappingVariantId(activeContainer);
+          const selectedDesignName = getActiveWrappingDesignName(activeContainer);
 
-        if (isWrap && wrappingVariantId) {
-          itemsToAdd.push({
-            id: Number(wrappingVariantId),
-            quantity: 1,
-            properties: {
-              _is_gift_wrapping: "true",
-              Design: selectedDesignName,
+          await removeAllWrappingFromCart();
+
+          const itemsToAdd = [];
+          if (mainVariantId) {
+            itemsToAdd.push({
+              id: Number(mainVariantId),
+              quantity: mainQuantity,
+              properties: productProperties,
+            });
+          }
+
+          if (isWrap && wrappingVariantId) {
+            itemsToAdd.push({
+              id: Number(wrappingVariantId),
+              quantity: 1,
+              properties: {
+                _is_gift_wrapping: "true",
+                Design: selectedDesignName,
+              },
+            });
+          }
+
+          await fetch("/cart/add.js", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
             },
+            body: JSON.stringify({ items: itemsToAdd }),
           });
+
+          if (activeContainer) {
+            await syncCartAttributes(activeContainer);
+          }
+
+          window.location.href = "/checkout";
+        } catch (err) {
+          console.error("[Gift Wrap] Buy It Now execution failed:", err);
+          window._giftBuyItNowProcessing = false;
+          window._isAddingGift = false;
         }
-
-        await fetch("/cart/add.js", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-          },
-          body: JSON.stringify({ items: itemsToAdd }),
-        });
-
-        if (activeContainer) {
-          await syncCartAttributes(activeContainer);
-        }
-
-        window.location.href = "/checkout";
-      } catch (err) {
-        console.error("[Gift Wrap] Buy It Now error:", err);
-        window._giftBuyItNowProcessing = false;
-        window._isAddingGift = false;
-      }
+      });
     },
     true
   );
@@ -558,9 +615,11 @@ async function updateWrappingInCart(newVariantId, designName) {
     const cartRes = await fetch("/cart.js", { headers: { Accept: "application/json" } });
     if (!cartRes.ok) return;
     const cart = await cartRes.json();
-    const hasWrap = (cart.items || []).some((item) => isWrappingCartItem(item));
+    const hasWrap = (cart.items || []).some(
+      (item) => item.properties && item.properties._is_gift_wrapping === "true"
+    );
 
-    if (hasWrap) {
+    if (hasWrap && newVariantId) {
       await removeAllWrappingFromCart();
       await fetch("/cart/add.js", {
         method: "POST",
@@ -581,7 +640,7 @@ async function updateWrappingInCart(newVariantId, designName) {
       await refreshCartUI();
     }
   } catch (err) {
-    console.error("[Gift Wrap] Error updating wrapping in cart:", err);
+    console.error("[Gift Wrap] updateWrappingInCart error:", err);
   }
 }
 
@@ -594,7 +653,11 @@ async function removeAllWrappingFromCart() {
     let needsUpdate = false;
 
     (cart.items || []).forEach((item) => {
-      if (isWrappingCartItem(item)) {
+      const isWrap =
+        (item.properties && item.properties._is_gift_wrapping === "true") ||
+        (item.properties && item.properties["_is_gift_wrapping"] === "true");
+
+      if (isWrap) {
         updates[item.key] = 0;
         needsUpdate = true;
       }
@@ -647,7 +710,7 @@ async function refreshCartUI() {
 }
 
 /* ========================================================
-   CART PAGE (EMPTY-CART CHECK & READ-ONLY PREVIEW)
+   CART PAGE (READ-ONLY PREVIEW & SAFE CIRCUIT-BREAKER HEALING)
    ======================================================== */
 async function initCartReadOnlyWidget(container) {
   try {
@@ -658,82 +721,44 @@ async function initCartReadOnlyWidget(container) {
 
     const cart = cartRes ? await cartRes.json() : { attributes: {}, items: [] };
     const attrs = cart.attributes || {};
-    const items = cart.items || [];
 
-    // Separate normal products from gift wrapping products
-    const normalItems = items.filter((item) => !isWrappingCartItem(item));
-    const wrapItems = items.filter((item) => isWrappingCartItem(item));
+    const wrapItems = (cart.items || []).filter(
+      (item) => item.properties && item.properties._is_gift_wrapping === "true"
+    );
 
-    // CASE 1: NO NORMAL PRODUCTS EXIST IN CART
-    // When the customer deletes the last normal product, purge wrapping and clear attributes
-    if (normalItems.length === 0) {
-      container.innerHTML = "";
-      container.style.display = "none";
-
-      const hasGiftAttrs =
-        Boolean(attrs["Gift Wrapping"]) ||
-        Boolean(attrs["Gift Message"]) ||
-        Boolean(attrs["Is Gift"]) ||
-        Boolean(attrs["To"]) ||
-        Boolean(attrs["From"]) ||
-        Boolean(attrs["Design"]);
-
-      if (wrapItems.length > 0 || hasGiftAttrs) {
-        const updates = {};
-        wrapItems.forEach((item) => {
-          updates[item.key] = 0;
-        });
-
-        await fetch("/cart/update.js", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({
-            updates,
-            attributes: {
-              "Is Gift": "",
-              "To": "",
-              "From": "",
-              "Gift Message": "",
-              "Gift Wrapping": "",
-              "Design": "",
-            },
-          }),
-        });
-
-        // Trigger native sections update to make Cart Total $0.00 and show empty cart state
-        await refreshCartUI();
-      }
-      return;
-    }
-
-    // CASE 2: NORMAL PRODUCT(S) EXIST
-    // Self-healing: Restore wrapping variant ONLY if at least 1 normal product is in the cart
     const hasWrapAttr = attrs["Gift Wrapping"] === "Yes";
-    if (hasWrapAttr && wrapItems.length === 0 && !window._giftCartHealing) {
-      window._giftCartHealing = true;
-      const designName = attrs["Design"] || "Classic Kraft";
+    if (hasWrapAttr && wrapItems.length === 0 && !sessionStorage.getItem("gm_healing_attempted")) {
+      sessionStorage.setItem("gm_healing_attempted", "true");
+      const targetVariantId = getActiveWrappingVariantId(container);
+      const designName = attrs["Design"] || getActiveWrappingDesignName(container);
 
-      await fetch("/cart/add.js", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({
-          items: [
-            {
-              id: KNOWN_WRAPPING_VARIANT_ID,
-              quantity: 1,
-              properties: {
-                _is_gift_wrapping: "true",
-                Design: designName,
-              },
-            },
-          ],
-        }),
-      });
-      window.location.reload();
-      return;
+      if (targetVariantId) {
+        try {
+          const healRes = await fetch("/cart/add.js", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({
+              items: [
+                {
+                  id: Number(targetVariantId),
+                  quantity: 1,
+                  properties: {
+                    _is_gift_wrapping: "true",
+                    Design: designName,
+                  },
+                },
+              ],
+            }),
+          });
+          if (healRes.ok) {
+            await refreshCartUI();
+          }
+        } catch (e) {
+          console.warn("[Gift Wrap] Self-healing skipped", e);
+        }
+      }
     }
 
-    // Enforce strictly 1 wrapping line item
     if (wrapItems.length > 1 || (wrapItems.length === 1 && wrapItems[0].quantity > 1)) {
       const updates = {};
       wrapItems.forEach((item, index) => {
@@ -764,6 +789,7 @@ async function initCartReadOnlyWidget(container) {
       const toVal = attrs["To"] ? escapeHTML(attrs["To"]) : "";
       const fromVal = attrs["From"] ? escapeHTML(attrs["From"]) : "";
       const msgVal = attrs["Gift Message"] ? escapeHTML(attrs["Gift Message"]).replace(/\n/g, "<br>") : "";
+
       const designAttr = attrs["Design"];
 
       let wrapDesign = "";
@@ -894,14 +920,16 @@ async function initCartReadOnlyWidget(container) {
       container.style.display = "none";
     }
   } catch (err) {
-    console.error("Error loading cart attributes:", err);
+    console.error("[Gift Wrap] Error loading cart attributes:", err);
     container.innerHTML = "";
     container.style.display = "none";
   }
 }
 
 function hideWrappingLineItems(cart) {
-  const wrapItems = (cart.items || []).filter((item) => isWrappingCartItem(item));
+  const wrapItems = (cart.items || []).filter(
+    (i) => (i.properties && i.properties._is_gift_wrapping === "true")
+  );
 
   wrapItems.forEach((item) => {
     const elements = document.querySelectorAll(

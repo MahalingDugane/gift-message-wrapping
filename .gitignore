@@ -10,3 +10,6 @@ prisma/*.sqlite
 prisma/*.sqlite-journal
 *.log
 .DS_Store
+
+.vercel
+.env*
